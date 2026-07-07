@@ -29,6 +29,10 @@ switch (command)
         RunGetCode(arg1 ?? string.Empty);
         break;
 
+    case "info":
+        RunInfo(arg1 ?? string.Empty);
+        break;
+
     case "tree":
         RunTree();
         break;
@@ -97,12 +101,30 @@ void RunSearch(string pattern)
     var hits = new NodeSearchEngine().Search(nodes, new SearchQuery { NamePattern = pattern, MaxResults = 25 });
     foreach (var hit in hits)
     {
-        Console.WriteLine($"[{hit.Score,3}] {hit.Kind,-10} {hit.QualifiedName}  ({hit.Location.FilePath}:{hit.Location.StartLine})  id={hit.Id}");
-        Console.WriteLine($"       {hit.Summary.Signature}");
-        if (hit.Summary.DocComment is { Length: > 0 } doc)
-        {
-            Console.WriteLine($"       // {doc}");
-        }
+        Console.WriteLine($"{hit.Id}  {hit.Name}");
+    }
+}
+
+void RunInfo(string nodeId)
+{
+    if (!TryLoadSessionNodes(out var nodes))
+    {
+        return;
+    }
+
+    var node = nodes.FirstOrDefault(n => n.Id == nodeId);
+    if (node is null)
+    {
+        Console.WriteLine("Node not found.");
+        return;
+    }
+
+    Console.WriteLine($"{node.Kind}  {node.QualifiedName}");
+    Console.WriteLine($"path: {node.Location.FilePath}:{node.Location.StartLine}");
+    Console.WriteLine($"signature: {node.Summary.Signature}");
+    if (node.Summary.DocComment is { Length: > 0 } doc)
+    {
+        Console.WriteLine($"doc: {doc}");
     }
 }
 
@@ -190,7 +212,8 @@ void PrintHelp()
     Console.WriteLine("""
         CodeIndexer — usage:
           index [path]         Full re-index of the session rooted at path (default: cwd)
-          search <pattern>     Search node names, ranked
+          search <pattern>     Search node names, ranked (prints id + name only)
+          info <nodeId>        Print kind, path, signature, and doc comment for a node by ID
           get-code <nodeId>    Print the full body of a node by ID
           tree                 Print the directory tree of indexed files
           outline               Print the namespace/scope outline
