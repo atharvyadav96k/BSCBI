@@ -72,6 +72,29 @@ public class StructureTests : IDisposable
     }
 
     [Fact]
+    public void ScopeOutlineBuilder_ImportSharingNamespacePath_DoesNotOverwriteNamespaceKind()
+    {
+        var namespaceNode = MakeNode("App.Models", "App.Models", NodeKind.Namespace, "Models/User.cs");
+        // An import's own scope chain is a single unsplit segment (e.g. "App.Models"),
+        // exactly like the real CSharpNodeWalker emits it, so it collides with the
+        // namespace's path once both get split on '.' during outline building.
+        var importNode = namespaceNode with
+        {
+            Id = "import-id",
+            Name = "App.Models",
+            ScopeChain = new[] { "App.Models" },
+            Kind = NodeKind.Import,
+            Location = namespaceNode.Location with { FilePath = "Controllers/OrdersController.cs" },
+        };
+
+        var outline = ScopeOutlineBuilder.Build(new[] { importNode, namespaceNode });
+
+        var app = Assert.Single(outline, n => n.Name == "App");
+        var models = Assert.Single(app.Children, n => n.Name == "Models");
+        Assert.Equal(NodeKind.Namespace, models.Kind);
+    }
+
+    [Fact]
     public void ScopeOutlineBuilder_NestsByDottedNamespaceSegments()
     {
         var nodes = new[]

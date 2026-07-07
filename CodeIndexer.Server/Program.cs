@@ -96,6 +96,11 @@ void RunSearch(string pattern)
     foreach (var hit in hits)
     {
         Console.WriteLine($"[{hit.Score,3}] {hit.Kind,-10} {hit.QualifiedName}  ({hit.Location.FilePath}:{hit.Location.StartLine})  id={hit.Id}");
+        Console.WriteLine($"       {hit.Summary.Signature}");
+        if (hit.Summary.DocComment is { Length: > 0 } doc)
+        {
+            Console.WriteLine($"       // {doc}");
+        }
     }
 }
 

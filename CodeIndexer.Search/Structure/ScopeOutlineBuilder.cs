@@ -15,6 +15,15 @@ public static class ScopeOutlineBuilder
 
         foreach (var node in nodes)
         {
+            // Imports reference an existing scope rather than declaring a new one — an
+            // import's dotted name can collide with a real namespace's path (e.g. "using
+            // App.Models;" vs "namespace App.Models"), and placing it in the tree would
+            // let it overwrite the real declaration's kind depending on iteration order.
+            if (node.Kind == NodeKind.Import)
+            {
+                continue;
+            }
+
             var segments = node.ScopeChain.SelectMany(s => s.Split(node.ScopeSeparator)).ToArray();
 
             var current = root;
