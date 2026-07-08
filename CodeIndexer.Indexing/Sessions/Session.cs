@@ -13,4 +13,6 @@ public sealed record Session
     public string IndexFilePath => SessionPaths.IndexFile(RootPath);
 
     public string MetadataFilePath => SessionPaths.MetadataFile(RootPath);
+
+    public string ManifestFilePath => SessionPaths.ManifestFile(RootPath);
 }

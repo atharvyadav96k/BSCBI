@@ -1,5 +1,6 @@
 using CodeIndexer.Core.Parsing;
 using CodeIndexer.Indexing;
+using CodeIndexer.Indexing.GitHooks;
 using CodeIndexer.Indexing.Sessions;
 using CodeIndexer.Parsing.CSharp;
 using CodeIndexer.Parsing.JavaScript;
@@ -66,6 +67,18 @@ switch (command)
         RunUsages(arg1 ?? string.Empty);
         break;
 
+    case "update":
+        await RunUpdateAsync();
+        break;
+
+    case "verify":
+        RunVerify();
+        break;
+
+    case "install-hooks":
+        RunInstallHooks();
+        break;
+
     default:
         PrintHelp();
         break;
@@ -88,6 +101,104 @@ async Task RunIndexAsync(string directory)
             Console.WriteLine($"  - {skip}");
         }
     }
+}
+
+async Task RunUpdateAsync()
+{
+    var sessionManager = new SessionManager(new SessionRegistry());
+    var resolution = sessionManager.TryResolve(workingDirectory);
+    if (!resolution.Found)
+    {
+        Console.WriteLine("No session here. Run 'index' first.");
+        return;
+    }
+
+    var orchestrator = new IndexOrchestrator(parsers);
+    var result = await orchestrator.RunIncrementalIndexAsync(resolution.Session!, CancellationToken.None);
+
+    if (result.FellBackToFullIndex)
+    {
+        Console.WriteLine($"No prior manifest found — ran a full index instead. Indexed {result.NodesIndexed} nodes from {result.FilesAdded} files.");
+    }
+    else
+    {
+        Console.WriteLine(
+            $"Updated: {result.FilesAdded} added, {result.FilesChanged} changed, {result.FilesRemoved} removed, {result.FilesUnchanged} unchanged. {result.NodesIndexed} nodes indexed.");
+    }
+
+    if (result.SkippedFiles.Count > 0)
+    {
+        Console.WriteLine($"Skipped {result.SkippedFiles.Count} file(s):");
+        foreach (var skip in result.SkippedFiles)
+        {
+            Console.WriteLine($"  - {skip}");
+        }
+    }
+}
+
+void RunVerify()
+{
+    var sessionManager = new SessionManager(new SessionRegistry());
+    var resolution = sessionManager.TryResolve(workingDirectory);
+    if (!resolution.Found)
+    {
+        Console.WriteLine("No session here. Run 'index' first.");
+        return;
+    }
+
+    var orchestrator = new IndexOrchestrator(parsers);
+    var drift = orchestrator.DetectDrift(resolution.Session!);
+
+    if (drift.IsClean)
+    {
+        Console.WriteLine("Index is up to date — no drift detected.");
+        return;
+    }
+
+    Console.WriteLine($"Drift detected: {drift.Added.Count} added, {drift.Changed.Count} changed, {drift.Removed.Count} removed.");
+    foreach (var file in drift.Added)
+    {
+        Console.WriteLine($"  + {file}");
+    }
+
+    foreach (var file in drift.Changed)
+    {
+        Console.WriteLine($"  ~ {file}");
+    }
+
+    foreach (var file in drift.Removed)
+    {
+        Console.WriteLine($"  - {file}");
+    }
+
+    Console.WriteLine("Run 'update' to repair.");
+}
+
+void RunInstallHooks()
+{
+    var sessionManager = new SessionManager(new SessionRegistry());
+    var resolution = sessionManager.TryResolve(workingDirectory);
+    if (!resolution.Found)
+    {
+        Console.WriteLine("No session here. Run 'index' first.");
+        return;
+    }
+
+    var executablePath = Environment.ProcessPath;
+    if (executablePath is null)
+    {
+        Console.WriteLine("Could not determine this executable's path.");
+        return;
+    }
+
+    var result = GitHookInstaller.Install(resolution.Session!, executablePath);
+    if (!result.Success)
+    {
+        Console.WriteLine(result.ErrorMessage);
+        return;
+    }
+
+    Console.WriteLine($"Installed hooks in {result.HooksDirectory}: {string.Join(", ", result.InstalledHookNames)}");
 }
 
 bool TryLoadSessionNodes(out IReadOnlyList<CodeIndexer.Core.Nodes.CodeNode> nodes)
@@ -327,5 +438,8 @@ void PrintHelp()
           callees <nodeId>     Find nodes this one calls
           subtypes <nodeId>    Find types that inherit from/implement this one
           usages <nodeId>      Find parameters/fields/properties typed as this one (e.g. DI usage)
+          update               Incremental update: re-parse only changed files, drop deleted ones
+          verify               Report drift (added/changed/removed files) without changing anything
+          install-hooks        Install post-commit/post-merge/post-checkout git hooks that run 'update'
         """);
 }

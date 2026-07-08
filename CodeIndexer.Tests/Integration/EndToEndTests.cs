@@ -49,6 +49,20 @@ public class EndToEndTests : IDisposable
         return (session, readResult.Nodes, result);
     }
 
+    private async Task<(Session Session, IReadOnlyList<CodeNode> Nodes, IncrementalIndexResult Result)> UpdateAsync()
+    {
+        var sessionManager = new SessionManager(new SessionRegistry(Path.Combine(_root, "registry.json")));
+        var session = sessionManager.EnsureSession(_root);
+
+        var orchestrator = new IndexOrchestrator(_parsers);
+        var result = await orchestrator.RunIncrementalIndexAsync(session, CancellationToken.None);
+
+        var readResult = new BinaryIndexStore().Read(session.IndexFilePath);
+        Assert.True(readResult.Success, readResult.Detail);
+
+        return (session, readResult.Nodes, result);
+    }
+
     [Fact]
     public async Task FullPipeline_IndexSearchRetrieve_WorksEndToEnd()
     {
@@ -234,6 +248,111 @@ public class EndToEndTests : IDisposable
 
         var calleesOfGreet = finder.GetCallees(nodes, greetMethod.Id);
         Assert.Contains(calleesOfGreet, n => n.Id == formatMethod.Id);
+    }
+
+    [Fact]
+    public async Task FullPipeline_IncrementalUpdate_NoPriorIndex_FallsBackToFullIndex()
+    {
+        WriteSource("src/App.cs", "namespace App; public class Foo {}");
+
+        var (_, nodes, result) = await UpdateAsync();
+
+        Assert.True(result.FellBackToFullIndex);
+        Assert.Contains(nodes, n => n.Name == "Foo");
+    }
+
+    [Fact]
+    public async Task FullPipeline_IncrementalUpdate_UnchangedFiles_AreCarriedForwardNotReparsed()
+    {
+        WriteSource("src/App.cs", "namespace App; public class Foo {}");
+        await IndexAsync();
+
+        var (_, nodes, result) = await UpdateAsync();
+
+        Assert.False(result.FellBackToFullIndex);
+        Assert.Equal(1, result.FilesUnchanged);
+        Assert.Equal(0, result.FilesChanged);
+        Assert.Equal(0, result.FilesAdded);
+        Assert.Contains(nodes, n => n.Name == "Foo");
+    }
+
+    [Fact]
+    public async Task FullPipeline_IncrementalUpdate_ChangedFile_IsReparsedAndReplaced()
+    {
+        WriteSource("src/App.cs", "namespace App; public class Foo {}");
+        await IndexAsync();
+
+        File.WriteAllText(Path.Combine(_root, "src/App.cs"), "namespace App; public class Bar {}");
+        var (_, nodes, result) = await UpdateAsync();
+
+        Assert.Equal(1, result.FilesChanged);
+        Assert.DoesNotContain(nodes, n => n.Name == "Foo");
+        Assert.Contains(nodes, n => n.Name == "Bar");
+    }
+
+    [Fact]
+    public async Task FullPipeline_IncrementalUpdate_NewFile_IsParsedAndAdded()
+    {
+        WriteSource("src/App.cs", "namespace App; public class Foo {}");
+        await IndexAsync();
+
+        WriteSource("src/New.cs", "namespace App; public class NewOne {}");
+        var (_, nodes, result) = await UpdateAsync();
+
+        Assert.Equal(1, result.FilesAdded);
+        Assert.Contains(nodes, n => n.Name == "Foo");
+        Assert.Contains(nodes, n => n.Name == "NewOne");
+    }
+
+    [Fact]
+    public async Task FullPipeline_IncrementalUpdate_DeletedFile_DropsItsNodes()
+    {
+        WriteSource("src/App.cs", "namespace App; public class Foo {}");
+        WriteSource("src/Gone.cs", "namespace App; public class Gone {}");
+        await IndexAsync();
+
+        File.Delete(Path.Combine(_root, "src/Gone.cs"));
+        var (_, nodes, result) = await UpdateAsync();
+
+        Assert.Equal(1, result.FilesRemoved);
+        Assert.DoesNotContain(nodes, n => n.Name == "Gone");
+        Assert.Contains(nodes, n => n.Name == "Foo");
+    }
+
+    [Fact]
+    public async Task FullPipeline_IncrementalUpdate_RelationshipEdgesStillResolveAcrossCarriedForwardAndReparsedFiles()
+    {
+        WriteSource("src/IGreeter.cs", "namespace App; public interface IGreeter { string Greet(); }");
+        WriteSource("src/Greeter.cs", "namespace App; public class Greeter : IGreeter { public string Greet() => \"hi\"; }");
+        await IndexAsync();
+
+        // Only IGreeter.cs changes; Greeter.cs is carried forward unparsed, but its
+        // Implements edge must still resolve against the (possibly new-ID) interface node.
+        File.WriteAllText(Path.Combine(_root, "src/IGreeter.cs"), "namespace App; public interface IGreeter { string Greet(); string Extra(); }");
+        var (_, nodes, _) = await UpdateAsync();
+
+        var iGreeter = Assert.Single(nodes, n => n.Kind == NodeKind.Interface);
+        var greeter = Assert.Single(nodes, n => n.Kind == NodeKind.Class);
+        Assert.Contains(greeter.Edges, e => e.Kind == EdgeKind.Implements && e.TargetNodeId == iGreeter.Id);
+    }
+
+    [Fact]
+    public async Task FullPipeline_Verify_ReportsDriftThenCleanAfterUpdate()
+    {
+        WriteSource("src/App.cs", "namespace App; public class Foo {}");
+        var (session, _, _) = await IndexAsync();
+
+        File.WriteAllText(Path.Combine(_root, "src/App.cs"), "namespace App; public class Bar {}");
+
+        var orchestrator = new IndexOrchestrator(_parsers);
+        var driftBefore = orchestrator.DetectDrift(session);
+        Assert.False(driftBefore.IsClean);
+        Assert.Single(driftBefore.Changed);
+
+        await orchestrator.RunIncrementalIndexAsync(session, CancellationToken.None);
+
+        var driftAfter = orchestrator.DetectDrift(session);
+        Assert.True(driftAfter.IsClean);
     }
 
     public void Dispose()

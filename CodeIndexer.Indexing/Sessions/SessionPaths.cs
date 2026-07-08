@@ -12,9 +12,13 @@ public static class SessionPaths
 
     public const string MetadataFileName = "session.json";
 
+    public const string ManifestFileName = "manifest.json";
+
     public static string MarkerDirectory(string rootPath) => Path.Combine(rootPath, MarkerDirectoryName);
 
     public static string IndexFile(string rootPath) => Path.Combine(MarkerDirectory(rootPath), IndexFileName);
 
     public static string MetadataFile(string rootPath) => Path.Combine(MarkerDirectory(rootPath), MetadataFileName);
+
+    public static string ManifestFile(string rootPath) => Path.Combine(MarkerDirectory(rootPath), ManifestFileName);
 }
