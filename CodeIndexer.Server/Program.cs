@@ -62,6 +62,10 @@ switch (command)
         RunSubtypes(arg1 ?? string.Empty);
         break;
 
+    case "usages":
+        RunUsages(arg1 ?? string.Empty);
+        break;
+
     default:
         PrintHelp();
         break;
@@ -297,6 +301,16 @@ void RunSubtypes(string nodeId)
     PrintNodeList(new ReferenceFinder().GetSubtypes(nodes, nodeId));
 }
 
+void RunUsages(string nodeId)
+{
+    if (!TryLoadSessionNodes(out var nodes))
+    {
+        return;
+    }
+
+    PrintNodeList(new ReferenceFinder().GetUsages(nodes, nodeId));
+}
+
 void PrintHelp()
 {
     Console.WriteLine("""
@@ -312,5 +326,6 @@ void PrintHelp()
           callers <nodeId>     Find nodes that call this one
           callees <nodeId>     Find nodes this one calls
           subtypes <nodeId>    Find types that inherit from/implement this one
+          usages <nodeId>      Find parameters/fields/properties typed as this one (e.g. DI usage)
         """);
 }

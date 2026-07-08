@@ -230,6 +230,29 @@ public class CSharpParserTests
     }
 
     [Fact]
+    public async Task Parse_Constructor_IsEmittedAsMethodNodeWithParameters()
+    {
+        const string source = """
+            namespace App;
+
+            public class OrderService
+            {
+                public OrderService(IOrderRepository repository, ILogger logger)
+                {
+                }
+            }
+            """;
+
+        var nodes = await ParseAsync(source);
+
+        var ctor = Assert.Single(nodes, n => n.Kind == NodeKind.Method && n.Name == "constructor");
+        Assert.Equal("App.OrderService.constructor", ctor.QualifiedName);
+        Assert.Equal(2, ctor.Summary.Parameters.Count);
+        Assert.Equal("IOrderRepository", ctor.Summary.Parameters[0].Type);
+        Assert.Equal("ILogger", ctor.Summary.Parameters[1].Type);
+    }
+
+    [Fact]
     public async Task Parse_SameNodeTwice_ProducesSameId()
     {
         const string source = """

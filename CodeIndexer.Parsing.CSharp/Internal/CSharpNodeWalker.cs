@@ -95,6 +95,18 @@ internal sealed class CSharpNodeWalker : CSharpSyntaxWalker
         // Do not descend into method bodies — local functions/lambdas are not modeled as nodes in v1.
     }
 
+    public override void VisitConstructorDeclaration(ConstructorDeclarationSyntax node)
+    {
+        var parameters = node.ParameterList.Parameters
+            .Select(p => new ParameterInfo { Name = p.Identifier.Text, Type = p.Type?.ToString() ?? "var" })
+            .ToArray();
+
+        var signature = SignatureBuilder.ForConstructor(node);
+        var metadata = MetadataBuilder.Build(node.Modifiers, isTopLevelType: false, node.AttributeLists);
+        Emit(NodeKind.Method, "constructor", node, signature, parameters, null, metadata);
+        // Do not descend into the constructor body, matching methods.
+    }
+
     public override void VisitPropertyDeclaration(PropertyDeclarationSyntax node)
     {
         var signature = SignatureBuilder.ForProperty(node);

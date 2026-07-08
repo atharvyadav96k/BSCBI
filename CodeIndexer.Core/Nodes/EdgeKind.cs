@@ -12,4 +12,12 @@ public enum EdgeKind
     Inherits,
     Implements,
     Imports,
+
+    /// <summary>
+    /// A method parameter, field, or property whose declared type is another
+    /// indexed Class/Interface — covers usages that are neither a call nor an
+    /// inheritance relationship, most commonly constructor-injected
+    /// dependencies (e.g. "constructor(private authService: AuthService)").
+    /// </summary>
+    References,
 }

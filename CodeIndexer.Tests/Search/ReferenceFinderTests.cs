@@ -99,4 +99,17 @@ public class ReferenceFinderTests
         var result = Assert.Single(subtypes);
         Assert.Equal("impl", result.Id);
     }
+
+    [Fact]
+    public void GetUsages_FiltersToReferencesEdgesOnly()
+    {
+        var target = MakeNode("AuthService", "AuthService", NodeKind.Class);
+        var ctor = MakeNode("ctor", "AuthController.ctor", NodeKind.Method, new[] { new NodeEdge { Kind = EdgeKind.References, TargetNodeId = "target" } });
+        var caller = MakeNode("caller", "Caller", NodeKind.Method, new[] { new NodeEdge { Kind = EdgeKind.Calls, TargetNodeId = "target" } });
+
+        var usages = new ReferenceFinder().GetUsages(new[] { target, ctor, caller }, "target");
+
+        var result = Assert.Single(usages);
+        Assert.Equal("ctor", result.Id);
+    }
 }

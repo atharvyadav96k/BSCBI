@@ -46,6 +46,14 @@ internal static class SignatureBuilder
         return Join(modifiers, node.Type.ToString(), node.Identifier.Text) + accessors;
     }
 
+    public static string ForConstructor(ConstructorDeclarationSyntax node)
+    {
+        var modifiers = ModifiersText(node.Modifiers);
+        var parameters = node.ParameterList.ToString();
+
+        return Join(modifiers, node.Identifier.Text + parameters);
+    }
+
     public static string ForField(FieldDeclarationSyntax node, VariableDeclaratorSyntax variable)
     {
         var modifiers = ModifiersText(node.Modifiers);

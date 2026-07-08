@@ -23,6 +23,10 @@ namespace CodeIndexer.Indexing.Relationships;
 /// identifiers in a method's body text and links to another method only when
 /// its name is unique across the whole project. Overloaded or same-named
 /// methods in different types are skipped rather than guessed at.</item>
+/// <item>References cover a parameter/field/property type naming another
+/// indexed type — chiefly constructor-injected dependencies — resolved the
+/// same unambiguous-name-match way, including one level of generic unwrapping
+/// (e.g. "Task&lt;AuthService&gt;" resolves to AuthService).</item>
 /// </list>
 /// This trades completeness for not asserting a relationship the resolver
 /// isn't actually confident about.
@@ -54,6 +58,7 @@ public static class RelationshipResolver
         ResolveInheritance(nodes, edgesByNodeId);
         ResolveCalls(nodes, edgesByNodeId);
         ResolveImports(nodes, edgesByNodeId);
+        ResolveTypeUsages(nodes, edgesByNodeId);
 
         return nodes.Select(n => n with { Edges = edgesByNodeId[n.Id] }).ToArray();
     }
@@ -179,6 +184,106 @@ public static class RelationshipResolver
                 edgesByNodeId[node.Id].Add(new NodeEdge { Kind = EdgeKind.Imports, TargetNodeId = target.Id });
             }
         }
+    }
+
+    /// <summary>
+    /// A method parameter, field, or property type that names another indexed
+    /// Class/Interface/Struct — covers usages that are neither a call nor an
+    /// inheritance relationship, most commonly constructor-injected
+    /// dependencies (e.g. "constructor(private authService: AuthService)").
+    /// </summary>
+    private static void ResolveTypeUsages(IReadOnlyList<CodeNode> nodes, Dictionary<string, List<NodeEdge>> edgesByNodeId)
+    {
+        var typeNodesByName = nodes
+            .Where(n => n.Kind is NodeKind.Class or NodeKind.Interface or NodeKind.Struct)
+            .ToLookup(n => n.Name);
+
+        foreach (var node in nodes)
+        {
+            IEnumerable<string> typeTexts = node.Kind switch
+            {
+                NodeKind.Method => node.Summary.Parameters.Select(p => p.Type)
+                    .Concat(node.Summary.ReturnType is { Length: > 0 } rt ? new[] { rt } : Array.Empty<string>()),
+                NodeKind.Field or NodeKind.Property => node.Summary.ReturnType is { Length: > 0 } t ? new[] { t } : Array.Empty<string>(),
+                _ => Array.Empty<string>(),
+            };
+
+            var seenTargets = new HashSet<string>();
+            foreach (var typeText in typeTexts)
+            {
+                foreach (var candidateName in ExtractCandidateTypeNames(typeText))
+                {
+                    var candidates = typeNodesByName[candidateName].Where(c => c.Id != node.Id).ToArray();
+                    if (candidates.Length != 1)
+                    {
+                        continue;
+                    }
+
+                    if (seenTargets.Add(candidates[0].Id))
+                    {
+                        edgesByNodeId[node.Id].Add(new NodeEdge { Kind = EdgeKind.References, TargetNodeId = candidates[0].Id });
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The type name itself, plus (for a generic type like "Task&lt;AuthService&gt;"
+    /// or "Dictionary&lt;string, AuthService&gt;") each top-level generic argument —
+    /// covers the common case where the interesting reference is wrapped in a
+    /// container/task/promise type rather than named directly.
+    /// </summary>
+    private static IEnumerable<string> ExtractCandidateTypeNames(string typeText)
+    {
+        var cleaned = typeText.TrimEnd('?').Replace("[]", string.Empty).Trim();
+        if (cleaned.Length == 0)
+        {
+            yield break;
+        }
+
+        yield return SimplifyTypeName(cleaned);
+
+        var genericStart = cleaned.IndexOf('<');
+        if (genericStart < 0 || !cleaned.EndsWith('>'))
+        {
+            yield break;
+        }
+
+        var inner = cleaned[(genericStart + 1)..^1];
+        foreach (var part in SplitTopLevel(inner))
+        {
+            var simplified = SimplifyTypeName(part.Trim());
+            if (simplified.Length > 0)
+            {
+                yield return simplified;
+            }
+        }
+    }
+
+    private static IEnumerable<string> SplitTopLevel(string text)
+    {
+        var depth = 0;
+        var start = 0;
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '<')
+            {
+                depth++;
+            }
+            else if (text[i] == '>')
+            {
+                depth--;
+            }
+            else if (text[i] == ',' && depth == 0)
+            {
+                yield return text[start..i];
+                start = i + 1;
+            }
+        }
+
+        yield return text[start..];
     }
 
     private static string SimplifyTypeName(string rawName)

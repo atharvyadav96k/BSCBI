@@ -60,4 +60,15 @@ public sealed class ReferenceFinder
             .Where(hit => hit.Kind is EdgeKind.Inherits or EdgeKind.Implements)
             .Select(hit => hit.Source)
             .ToArray();
+
+    /// <summary>
+    /// Parameters, fields, and properties typed as <paramref name="targetNodeId"/>
+    /// — chiefly where a class is constructor-injected or held as a dependency,
+    /// as opposed to called or subclassed.
+    /// </summary>
+    public IReadOnlyList<CodeNode> GetUsages(IReadOnlyList<CodeNode> allNodes, string targetNodeId) =>
+        FindReferences(allNodes, targetNodeId)
+            .Where(hit => hit.Kind == EdgeKind.References)
+            .Select(hit => hit.Source)
+            .ToArray();
 }

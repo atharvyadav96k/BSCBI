@@ -12,7 +12,9 @@ public class RelationshipResolverTests
         NodeKind kind,
         string body = "",
         string filePath = "App.cs",
-        NodeMetadata? metadata = null)
+        NodeMetadata? metadata = null,
+        IReadOnlyList<ParameterInfo>? parameters = null,
+        string? returnType = null)
     {
         return new CodeNode
         {
@@ -23,7 +25,14 @@ public class RelationshipResolverTests
             QualifiedName = qualifiedName,
             Kind = kind,
             Location = new NodeLocation { FilePath = filePath, StartLine = 1, EndLine = 5 },
-            Summary = new NodeSummary { Name = name, Signature = name, Parameters = Array.Empty<ParameterInfo>(), LineCount = 5 },
+            Summary = new NodeSummary
+            {
+                Name = name,
+                Signature = name,
+                Parameters = parameters ?? Array.Empty<ParameterInfo>(),
+                ReturnType = returnType,
+                LineCount = 5,
+            },
             Body = body,
             Metadata = metadata ?? new NodeMetadata(),
             ContentHash = ContentHasher.Hash(body),
@@ -189,5 +198,64 @@ public class RelationshipResolverTests
         var resolved = RelationshipResolver.Resolve(new[] { import });
 
         Assert.Empty(resolved.Single().Edges);
+    }
+
+    [Fact]
+    public void Resolve_ConstructorParameterTypingAnotherClass_AddsReferencesEdge()
+    {
+        // The pattern this exists for: constructor(private authService: AuthService)
+        var authService = MakeNode("AuthService", "App.AuthService", NodeKind.Class);
+        var ctor = MakeNode(
+            "constructor",
+            "App.AuthController.constructor",
+            NodeKind.Method,
+            parameters: new[] { new ParameterInfo { Name = "authService", Type = "AuthService" } });
+
+        var resolved = RelationshipResolver.Resolve(new[] { authService, ctor });
+
+        var resolvedCtor = resolved.Single(n => n.Id == ctor.Id);
+        Assert.Contains(resolvedCtor.Edges, e => e.Kind == EdgeKind.References && e.TargetNodeId == authService.Id);
+    }
+
+    [Fact]
+    public void Resolve_FieldTypedAsAnotherClass_AddsReferencesEdge()
+    {
+        var repository = MakeNode("IOrderRepository", "App.IOrderRepository", NodeKind.Interface);
+        var field = MakeNode("_repository", "App.OrderService._repository", NodeKind.Field, returnType: "IOrderRepository");
+
+        var resolved = RelationshipResolver.Resolve(new[] { repository, field });
+
+        var resolvedField = resolved.Single(n => n.Id == field.Id);
+        Assert.Contains(resolvedField.Edges, e => e.Kind == EdgeKind.References && e.TargetNodeId == repository.Id);
+    }
+
+    [Fact]
+    public void Resolve_TypeWrappedInGeneric_UnwrapsOneLevelToFindReference()
+    {
+        // Task<AuthService> / Promise<AuthService>-shaped return types.
+        var authService = MakeNode("AuthService", "App.AuthService", NodeKind.Class);
+        var method = MakeNode("GetAuth", "App.Foo.GetAuth", NodeKind.Method, returnType: "Task<AuthService>");
+
+        var resolved = RelationshipResolver.Resolve(new[] { authService, method });
+
+        var resolvedMethod = resolved.Single(n => n.Id == method.Id);
+        Assert.Contains(resolvedMethod.Edges, e => e.Kind == EdgeKind.References && e.TargetNodeId == authService.Id);
+    }
+
+    [Fact]
+    public void Resolve_AmbiguousTypeName_SkipsReferenceEdge()
+    {
+        var first = MakeNode("Handler", "App.Feature1.Handler", NodeKind.Class);
+        var second = MakeNode("Handler", "App.Feature2.Handler", NodeKind.Class);
+        var method = MakeNode(
+            "Process",
+            "App.Foo.Process",
+            NodeKind.Method,
+            parameters: new[] { new ParameterInfo { Name = "handler", Type = "Handler" } });
+
+        var resolved = RelationshipResolver.Resolve(new[] { first, second, method });
+
+        var resolvedMethod = resolved.Single(n => n.Id == method.Id);
+        Assert.DoesNotContain(resolvedMethod.Edges, e => e.Kind == EdgeKind.References);
     }
 }
