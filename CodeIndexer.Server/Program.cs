@@ -13,8 +13,33 @@ using CodeIndexer.Storage;
 // Composition root: this is the only place a concrete parser is referenced.
 IReadOnlyList<ICodeParser> parsers = new ICodeParser[] { new CSharpParser(), new JavaScriptParser(), new TypeScriptParser() };
 
-var flags = args.Where(a => a.StartsWith("--", StringComparison.Ordinal)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-var positionalArgs = args.Where(a => !a.StartsWith("--", StringComparison.Ordinal)).ToArray();
+// Flags that take a value (e.g. --depth 2) must be named explicitly here —
+// everything else starting with "--" is treated as a standalone boolean flag,
+// so a boolean flag can never accidentally swallow the next positional arg.
+var valueFlagNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "--depth" };
+var flags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+var options = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+var positionalArgsList = new List<string>();
+for (var i = 0; i < args.Length; i++)
+{
+    var a = args[i];
+    if (!a.StartsWith("--", StringComparison.Ordinal))
+    {
+        positionalArgsList.Add(a);
+        continue;
+    }
+
+    if (valueFlagNames.Contains(a) && i + 1 < args.Length)
+    {
+        options[a] = args[++i];
+    }
+    else
+    {
+        flags.Add(a);
+    }
+}
+
+var positionalArgs = positionalArgsList.ToArray();
 var command = positionalArgs.Length > 0 ? positionalArgs[0] : "help";
 var arg1 = positionalArgs.Length > 1 ? positionalArgs[1] : null;
 var workingDirectory = Directory.GetCurrentDirectory();
@@ -44,7 +69,7 @@ switch (command)
         break;
 
     case "tree":
-        RunTree();
+        RunTree(arg1, options.GetValueOrDefault("--depth"), flags.Contains("--full"));
         break;
 
     case "outline":
@@ -304,7 +329,9 @@ void RunGetCode(string nodeId)
     Console.WriteLine(result.Body);
 }
 
-void RunTree()
+const int DefaultTreeDepth = 3;
+
+void RunTree(string? scopePath, string? depthOption, bool full)
 {
     if (!TryLoadSessionNodes(out var nodes))
     {
@@ -315,15 +342,84 @@ void RunTree()
     var resolution = sessionManager.TryResolve(workingDirectory);
     var files = nodes.Select(n => n.Location.FilePath).Distinct().ToArray();
     var tree = DirectoryTreeBuilder.Build(resolution.Session!.RootPath, files);
-    PrintTree(tree, 0);
+
+    if (!string.IsNullOrEmpty(scopePath))
+    {
+        var scoped = FindSubtree(tree, scopePath);
+        if (scoped is null)
+        {
+            Console.WriteLine($"(no indexed folder matches '{scopePath}')");
+            return;
+        }
+
+        tree = scoped;
+    }
+
+    var maxDepth = DefaultTreeDepth;
+    if (full)
+    {
+        maxDepth = int.MaxValue;
+    }
+    else if (depthOption is not null)
+    {
+        if (int.TryParse(depthOption, out var parsed) && parsed > 0)
+        {
+            maxDepth = parsed;
+        }
+        else
+        {
+            Console.WriteLine($"Invalid --depth value '{depthOption}'; using default of {DefaultTreeDepth}.");
+        }
+    }
+
+    PrintTree(tree, 0, maxDepth);
 }
 
-void PrintTree(DirectoryTreeNode node, int depth)
+DirectoryTreeNode? FindSubtree(DirectoryTreeNode root, string relativePath)
 {
-    Console.WriteLine(new string(' ', depth * 2) + node.Name);
+    var normalized = relativePath.Replace('\\', '/').Trim('/');
+    if (normalized.Length == 0)
+    {
+        return root;
+    }
+
+    var current = root;
+    foreach (var segment in normalized.Split('/'))
+    {
+        var next = current.Children.FirstOrDefault(c => c.IsDirectory && string.Equals(c.Name, segment, StringComparison.OrdinalIgnoreCase));
+        if (next is null)
+        {
+            return null;
+        }
+
+        current = next;
+    }
+
+    return current;
+}
+
+// Depth is capped by default (folders can otherwise dump thousands of vendored/
+// leaf files before anything relevant appears) — truncation is reported inline
+// at the exact point it happens rather than as a single opaque total, and
+// --depth/--full are always available to see everything.
+void PrintTree(DirectoryTreeNode node, int depth, int maxDepth)
+{
+    Console.WriteLine(new string(' ', depth * 2) + node.Name + (node.IsDirectory ? "/" : string.Empty));
+
+    if (node.IsDirectory && depth >= maxDepth)
+    {
+        if (node.Children.Count > 0)
+        {
+            var noun = node.Children.Count == 1 ? "entry" : "entries";
+            Console.WriteLine(new string(' ', (depth + 1) * 2) + $"... {node.Children.Count} more {noun} not shown (use --depth or --full)");
+        }
+
+        return;
+    }
+
     foreach (var child in node.Children)
     {
-        PrintTree(child, depth + 1);
+        PrintTree(child, depth + 1, maxDepth);
     }
 }
 
@@ -419,7 +515,24 @@ void RunChildren(string nodeId)
         return;
     }
 
-    PrintNodeList(new ReferenceFinder().GetChildren(nodes, nodeId));
+    PrintChildren(new ReferenceFinder().GetChildren(nodes, nodeId));
+}
+
+// Children always live in the same file as their container (containment never
+// crosses files for plain members), so repeating the full path per line is
+// pure noise — a line number is all that's needed here.
+void PrintChildren(IReadOnlyList<CodeIndexer.Core.Nodes.CodeNode> children)
+{
+    if (children.Count == 0)
+    {
+        Console.WriteLine("(none found)");
+        return;
+    }
+
+    foreach (var node in children)
+    {
+        Console.WriteLine($"{node.Id}  {node.Kind,-10} {node.Name}  (line {node.Location.StartLine})");
+    }
 }
 
 void RunRefs(string nodeId)
@@ -517,7 +630,7 @@ void PrintHelp()
           search <pattern>     Search node names, ranked (hides Import/Field by default; add --all to include them)
           info <nodeId>        Print kind, path, signature, and doc comment for a node by ID
           get-code <nodeId>    Print the full body of a node by ID
-          tree                 Print the directory tree of indexed files
+          tree [path] [--depth N] [--full]  Print the directory tree, optionally scoped to [path]; capped at depth 3 by default (--depth N or --full to see more)
           outline               Print the namespace/scope outline
           locate <fragment>    Find files by name or path fragment
           children <nodeId>    List direct members (methods/fields/nested types) declared inside this node
