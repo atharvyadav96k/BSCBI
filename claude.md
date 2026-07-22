@@ -35,7 +35,10 @@ picks one → requests the full **code** on demand.
 - **Implementation language:** C# (.NET 8 LTS).
 - **First supported target language:** C# only, via **Roslyn**
   (Microsoft.CodeAnalysis).
-- **Storage:** a binary (`.bin`) index file.
+- **Storage:** a JSON structure under `.codeindex/`, sharded per source file
+  (`indexed-files/<relative-path>/{index.json,relations.json}`), plus
+  `manifest.json` (file hashes) and `search-index.json` (name/id → file
+  lookup). See `CodeIndexer.Storage/IIndexStore.cs`.
 
 ---
 
